@@ -1,0 +1,29 @@
+{
+  "name": "rolldown-plugin-strip",
+  "version": "0.1.0",
+  "description": "Rolldown plugin to remove debug-only code paths.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "check": "npm run lint && npm run test",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "keywords": [
+    "rolldown",
+    "plugin",
+    "strip"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/estree": "^1.0.8",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}
