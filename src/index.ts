@@ -32,14 +32,18 @@ function stripConfiguredCallExpressions(code: string, functions: string[]): stri
   return output;
 }
 
+/**
+ * Finds the closing brace index for a `{` at `openBraceIndex`.
+ * Returns -1 if no matching closing brace is found.
+ */
 function findMatchingBrace(code: string, openBraceIndex: number): number {
   let depth = 0;
 
   for (let i = openBraceIndex; i < code.length; i += 1) {
-    const ch = code[i];
-    if (ch === "{") {
+    const currentChar = code[i];
+    if (currentChar === "{") {
       depth += 1;
-    } else if (ch === "}") {
+    } else if (currentChar === "}") {
       depth -= 1;
       if (depth === 0) {
         return i;
@@ -50,6 +54,9 @@ function findMatchingBrace(code: string, openBraceIndex: number): number {
   return -1;
 }
 
+/**
+ * Removes statements prefixed with configured labels, including labeled blocks.
+ */
 function stripConfiguredLabels(code: string, labels: string[]): string {
   let output = code;
 
@@ -58,6 +65,7 @@ function stripConfiguredLabels(code: string, labels: string[]): string {
     const blockPattern = new RegExp(`(^|\\n)([ \\t]*)${escaped}[ \\t]*:[^\\n\\r]*\\{`, "g");
     let blockMatch = blockPattern.exec(output);
 
+    // Remove block-style labels such as `foo: { ... }` and `label: while (...) { ... }`.
     while (blockMatch) {
       const matchStart = blockMatch.index + blockMatch[1].length;
       const openBraceRelativeIndex = blockMatch[0].lastIndexOf("{");
@@ -83,6 +91,7 @@ function stripConfiguredLabels(code: string, labels: string[]): string {
       blockMatch = blockPattern.exec(output);
     }
 
+    // Remove single-line labeled statements such as `test: doThing();`.
     const statementPattern = new RegExp(`^[ \\t]*${escaped}[ \\t]*:[^\\n\\r]*\\r?\\n?`, "gm");
     output = output.replace(statementPattern, "");
   }
