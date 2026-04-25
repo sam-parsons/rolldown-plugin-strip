@@ -55,12 +55,13 @@ function stripConfiguredLabels(code: string, labels: string[]): string {
 
   for (const label of labels) {
     const escaped = escapeRegExp(label);
-    const blockPattern = new RegExp(`(^|\\n)([ \\t]*)${escaped}[ \\t]*:[ \\t]*\\{`, "g");
+    const blockPattern = new RegExp(`(^|\\n)([ \\t]*)${escaped}[ \\t]*:[^\\n\\r]*\\{`, "g");
     let blockMatch = blockPattern.exec(output);
 
     while (blockMatch) {
       const matchStart = blockMatch.index + blockMatch[1].length;
-      const openBraceIndex = matchStart + blockMatch[2].length + label.length + 1;
+      const openBraceRelativeIndex = blockMatch[0].lastIndexOf("{");
+      const openBraceIndex = blockMatch.index + openBraceRelativeIndex;
       const closeBraceIndex = findMatchingBrace(output, openBraceIndex);
       if (closeBraceIndex === -1) {
         break;
