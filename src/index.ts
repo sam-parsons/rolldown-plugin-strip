@@ -32,6 +32,63 @@ function stripConfiguredCallExpressions(code: string, functions: string[]): stri
   return output;
 }
 
+function findMatchingBrace(code: string, openBraceIndex: number): number {
+  let depth = 0;
+
+  for (let i = openBraceIndex; i < code.length; i += 1) {
+    const ch = code[i];
+    if (ch === "{") {
+      depth += 1;
+    } else if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function stripConfiguredLabels(code: string, labels: string[]): string {
+  let output = code;
+
+  for (const label of labels) {
+    const escaped = escapeRegExp(label);
+    const blockPattern = new RegExp(`(^|\\n)([ \\t]*)${escaped}[ \\t]*:[ \\t]*\\{`, "g");
+    let blockMatch = blockPattern.exec(output);
+
+    while (blockMatch) {
+      const matchStart = blockMatch.index + blockMatch[1].length;
+      const openBraceIndex = matchStart + blockMatch[2].length + label.length + 1;
+      const closeBraceIndex = findMatchingBrace(output, openBraceIndex);
+      if (closeBraceIndex === -1) {
+        break;
+      }
+
+      let removeEnd = closeBraceIndex + 1;
+      if (output[removeEnd] === ";") {
+        removeEnd += 1;
+      }
+      if (output[removeEnd] === "\r") {
+        removeEnd += 1;
+      }
+      if (output[removeEnd] === "\n") {
+        removeEnd += 1;
+      }
+
+      output = output.slice(0, matchStart) + output.slice(removeEnd);
+      blockPattern.lastIndex = matchStart;
+      blockMatch = blockPattern.exec(output);
+    }
+
+    const statementPattern = new RegExp(`^[ \\t]*${escaped}[ \\t]*:[^\\n\\r]*\\r?\\n?`, "gm");
+    output = output.replace(statementPattern, "");
+  }
+
+  return output;
+}
+
 export function strip(options: StripOptions = {}): StripPlugin {
   return {
     name: "rolldown-plugin-strip",
@@ -46,6 +103,10 @@ export function strip(options: StripOptions = {}): StripPlugin {
 
       if (options.functions?.length) {
         stripped = stripConfiguredCallExpressions(stripped, options.functions);
+      }
+
+      if (options.labels?.length) {
+        stripped = stripConfiguredLabels(stripped, options.labels);
       }
 
       return { code: stripped, map: null };

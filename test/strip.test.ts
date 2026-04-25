@@ -52,4 +52,37 @@ describe("strip", () => {
       map: null
     });
   });
+
+  it("removes configured labeled blocks", () => {
+    const plugin = strip({ labels: ["dev"] });
+    const source = [
+      "const before = 1;",
+      "dev: {",
+      "  console.log('remove block');",
+      "}",
+      "const after = 2;"
+    ].join("\n");
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: ["const before = 1;", "const after = 2;"].join("\n"),
+      map: null
+    });
+  });
+
+  it("removes configured non-block labeled statements", () => {
+    const plugin = strip({ labels: ["test"] });
+    const source = [
+      "const before = 1;",
+      "test: doThing();",
+      "prod: doNotRemove();",
+      "const after = 2;"
+    ].join("\n");
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: ["const before = 1;", "prod: doNotRemove();", "const after = 2;"].join("\n"),
+      map: null
+    });
+  });
 });
