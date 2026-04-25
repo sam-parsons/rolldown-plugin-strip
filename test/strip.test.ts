@@ -11,11 +11,7 @@ describe("strip", () => {
   });
 
   it("is currently a no-op transform", () => {
-    const plugin = strip({
-      functions: ["console.log"],
-      debugger: false,
-      labels: ["dev"]
-    });
+    const plugin = strip();
     const source = "console.log('hello'); debugger;";
     const transformed = plugin.transform(source, "index.ts");
 
@@ -32,6 +28,27 @@ describe("strip", () => {
 
     expect(transformed).toEqual({
       code: "const x = 1;\nconst y = 2;\n",
+      map: null
+    });
+  });
+
+  it("removes configured call expression statements", () => {
+    const plugin = strip({ functions: ["console.log", "logger.debug"] });
+    const source = [
+      "const keep = true;",
+      "console.log('remove me');",
+      "logger.debug('also remove');",
+      "logger.info('keep me');",
+      "const x = console.log('keep inline');"
+    ].join("\n");
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: [
+        "const keep = true;",
+        "logger.info('keep me');",
+        "const x = console.log('keep inline');"
+      ].join("\n"),
       map: null
     });
   });

@@ -16,17 +16,38 @@ function stripDebuggerStatements(code: string): string {
   return code.replace(/^[ \t]*debugger\s*;?[ \t]*\r?\n?/gm, "");
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function stripConfiguredCallExpressions(code: string, functions: string[]): string {
+  let output = code;
+
+  for (const fn of functions) {
+    const escaped = escapeRegExp(fn);
+    const pattern = new RegExp(`^[ \\t]*${escaped}\\s*\\([^\\n\\r;]*\\)\\s*;?[ \\t]*\\r?\\n?`, "gm");
+    output = output.replace(pattern, "");
+  }
+
+  return output;
+}
+
 export function strip(options: StripOptions = {}): StripPlugin {
   return {
     name: "rolldown-plugin-strip",
     apply: "build",
     enforce: "pre",
     transform(code: string, _id: string) {
-      if (!options.debugger) {
-        return { code, map: null };
+      let stripped = code;
+
+      if (options.debugger) {
+        stripped = stripDebuggerStatements(stripped);
       }
 
-      const stripped = stripDebuggerStatements(code);
+      if (options.functions?.length) {
+        stripped = stripConfiguredCallExpressions(stripped, options.functions);
+      }
+
       return { code: stripped, map: null };
     }
   };
