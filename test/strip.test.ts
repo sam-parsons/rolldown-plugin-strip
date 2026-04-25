@@ -52,4 +52,42 @@ describe("strip", () => {
       map: null
     });
   });
+
+  it("removes configured labeled blocks (MDN-style)", () => {
+    const plugin = strip({ labels: ["foo"] });
+    const source = [
+      "console.log('before');",
+      "foo: {",
+      "  console.log('face');",
+      "  break foo;",
+      "  console.log('this will not run');",
+      "}",
+      "console.log('after');"
+    ].join("\n");
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: ["console.log('before');", "console.log('after');"].join("\n"),
+      map: null
+    });
+  });
+
+  it("removes configured non-block labeled statements (MDN-style)", () => {
+    const plugin = strip({ labels: ["labelCancelLoops"] });
+    const source = [
+      "let x = 0;",
+      "let z = 0;",
+      "labelCancelLoops: while (x < 2) {",
+      "  x += 1;",
+      "  z += 1;",
+      "}",
+      "console.log('kept');"
+    ].join("\n");
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: ["let x = 0;", "let z = 0;", "console.log('kept');"].join("\n"),
+      map: null
+    });
+  });
 });
