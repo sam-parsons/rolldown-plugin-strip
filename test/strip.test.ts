@@ -13,7 +13,7 @@ describe("strip", () => {
   it("is currently a no-op transform", () => {
     const plugin = strip({
       functions: ["console.log"],
-      debugger: true,
+      debugger: false,
       labels: ["dev"]
     });
     const source = "console.log('hello'); debugger;";
@@ -21,6 +21,17 @@ describe("strip", () => {
 
     expect(transformed).toEqual({
       code: source,
+      map: null
+    });
+  });
+
+  it("removes debugger statements when enabled", () => {
+    const plugin = strip({ debugger: true });
+    const source = "const x = 1;\ndebugger;\nconst y = 2;\n";
+    const transformed = plugin.transform(source, "index.ts");
+
+    expect(transformed).toEqual({
+      code: "const x = 1;\nconst y = 2;\n",
       map: null
     });
   });
