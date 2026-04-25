@@ -11,15 +11,23 @@ export interface StripPlugin {
   transform: (code: string, id: string) => null | { code: string; map: null };
 }
 
-export function strip(options: StripOptions = {}): StripPlugin {
-  void options;
+function stripDebuggerStatements(code: string): string {
+  // Remove full lines that only contain a debugger statement.
+  return code.replace(/^[ \t]*debugger\s*;?[ \t]*\r?\n?/gm, "");
+}
 
+export function strip(options: StripOptions = {}): StripPlugin {
   return {
     name: "rolldown-plugin-strip",
     apply: "build",
     enforce: "pre",
     transform(code: string, _id: string) {
-      return { code, map: null };
+      if (!options.debugger) {
+        return { code, map: null };
+      }
+
+      const stripped = stripDebuggerStatements(code);
+      return { code: stripped, map: null };
     }
   };
 }
