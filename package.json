@@ -22,8 +22,13 @@
   "author": "",
   "license": "MIT",
   "devDependencies": {
+    "@jridgewell/trace-mapping": "^0.3.31",
     "@types/estree": "^1.0.8",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@jridgewell/remapping": "^2.3.5",
+    "magic-string": "^0.30.21"
   }
 }

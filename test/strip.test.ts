@@ -1,5 +1,21 @@
 import { describe, expect, it, vi } from "vitest";
+import { eachMapping, originalPositionFor, TraceMap } from "@jridgewell/trace-mapping";
 import { strip } from "../src/index.js";
+
+function parseSourceMapJson(map: { toString(): string } | null): Record<string, unknown> {
+  expect(map).not.toBeNull();
+  return JSON.parse(map!.toString()) as Record<string, unknown>;
+}
+
+/** Assert the map is not empty VLQ only — it actually contains traceable segments. */
+function expectSourceMapHasTraceableSegments(raw: Record<string, unknown>) {
+  const map = new TraceMap(raw as ConstructorParameters<typeof TraceMap>[0]);
+  let segmentCount = 0;
+  eachMapping(map, () => {
+    segmentCount += 1;
+  });
+  expect(segmentCount).toBeGreaterThan(0);
+}
 
 describe("strip", () => {
   it("returns a plugin with stable shape", () => {
@@ -10,7 +26,7 @@ describe("strip", () => {
     expect(plugin.enforce).toBe("pre");
   });
 
-  it("is currently a no-op transform", () => {
+  it("is a no-op transform when nothing is configured to strip", () => {
     const plugin = strip();
     const source = "console.log('hello'); debugger;";
     const transformed = plugin.transform(source, "index.ts");
@@ -26,10 +42,22 @@ describe("strip", () => {
     const source = "const x = 1;\ndebugger;\nconst y = 2;\n";
     const transformed = plugin.transform(source, "index.ts");
 
-    expect(transformed).toEqual({
-      code: "const x = 1;\nconst y = 2;\n",
-      map: null
-    });
+    expect(transformed?.code).toBe("const x = 1;\nconst y = 2;\n");
+    const raw = parseSourceMapJson(transformed!.map as { toString(): string });
+    expect(raw.version).toBe(3);
+    expect(raw.sources).toEqual(["index.ts"]);
+    expect(typeof raw.mappings).toBe("string");
+    expectSourceMapHasTraceableSegments(raw);
+  });
+
+  it("maps generated lines back to the original source after stripping debugger", () => {
+    const plugin = strip({ debugger: true });
+    const source = "const x = 1;\ndebugger;\nconst y = 2;\n";
+    const transformed = plugin.transform(source, "app.ts")!;
+    const map = new TraceMap(JSON.parse(transformed.map!.toString()));
+    const pos = originalPositionFor(map, { line: 2, column: 0 });
+    expect("line" in pos && pos.line).toBe(3);
+    expect("source" in pos && pos.source).toBe("app.ts");
   });
 
   it("removes configured call expression statements", () => {
@@ -43,14 +71,12 @@ describe("strip", () => {
     ].join("\n");
     const transformed = plugin.transform(source, "index.ts");
 
-    expect(transformed).toEqual({
-      code: [
-        "const keep = true;",
-        "logger.info('keep me');",
-        "const x = console.log('keep inline');"
-      ].join("\n"),
-      map: null
-    });
+    expect(transformed?.code).toBe(
+      ["const keep = true;", "logger.info('keep me');", "const x = console.log('keep inline');"].join("\n")
+    );
+    const raw = parseSourceMapJson(transformed!.map as { toString(): string });
+    expect(raw.version).toBe(3);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("skips chained calls by default so stripping does not break runtime", () => {
@@ -58,10 +84,10 @@ describe("strip", () => {
     const source = ["console.log('ok');", "console.log('x').then(() => {});", "console.log('tail');"].join("\n");
     const transformed = plugin.transform(source, "chain.ts");
 
-    expect(transformed).toEqual({
-      code: "console.log('x').then(() => {});",
-      map: null
-    });
+    expect(transformed?.code).toBe("console.log('x').then(() => {});");
+    const raw = parseSourceMapJson(transformed!.map as { toString(): string });
+    expect(raw.sources).toEqual(["chain.ts"]);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("throws on chained calls when chainedCalls is error", () => {
@@ -79,6 +105,7 @@ describe("strip", () => {
       const transformed = plugin.transform(source, "warn.ts");
 
       expect(transformed?.code).toBe(source);
+      expect(transformed?.map).toBeNull();
       expect(warn).toHaveBeenCalled();
     } finally {
       warn.mockRestore();
@@ -98,10 +125,9 @@ describe("strip", () => {
     ].join("\n");
     const transformed = plugin.transform(source, "index.ts");
 
-    expect(transformed).toEqual({
-      code: ["console.log('before');", "console.log('after');"].join("\n"),
-      map: null
-    });
+    expect(transformed?.code).toBe(["console.log('before');", "console.log('after');"].join("\n"));
+    const raw = parseSourceMapJson(transformed!.map as { toString(): string });
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("removes configured non-block labeled statements (MDN-style)", () => {
@@ -117,9 +143,8 @@ describe("strip", () => {
     ].join("\n");
     const transformed = plugin.transform(source, "index.ts");
 
-    expect(transformed).toEqual({
-      code: ["let x = 0;", "let z = 0;", "console.log('kept');"].join("\n"),
-      map: null
-    });
+    expect(transformed?.code).toBe(["let x = 0;", "let z = 0;", "console.log('kept');"].join("\n"));
+    const raw = parseSourceMapJson(transformed!.map as { toString(): string });
+    expectSourceMapHasTraceableSegments(raw);
   });
 });
