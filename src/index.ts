@@ -1,7 +1,15 @@
+export type ChainedCallsPolicy = "skip" | "warn" | "error";
+
 export interface StripOptions {
   functions?: string[];
   debugger?: boolean;
   labels?: string[];
+  /**
+   * When a configured call is not a whole statement (e.g. `fn().chain()`),
+   * stripping would break runtime. Controls behavior for those lines.
+   * @default "skip"
+   */
+  chainedCalls?: ChainedCallsPolicy;
 }
 
 export interface StripPlugin {
@@ -20,16 +28,85 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function stripConfiguredCallExpressions(code: string, functions: string[]): string {
-  let output = code;
+/**
+ * Returns index of the `)` that closes the `(` at `openParenIndex`, or -1.
+ * Does not parse strings; sufficient for typical strip targets on one line.
+ */
+function findClosingParen(line: string, openParenIndex: number): number {
+  let depth = 0;
+  for (let i = openParenIndex; i < line.length; i += 1) {
+    const c = line[i];
+    if (c === "(") {
+      depth += 1;
+    } else if (c === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
 
-  for (const fn of functions) {
-    const escaped = escapeRegExp(fn);
-    const pattern = new RegExp(`^[ \\t]*${escaped}\\s*\\([^\\n\\r;]*\\)\\s*;?[ \\t]*\\r?\\n?`, "gm");
-    output = output.replace(pattern, "");
+function analyzeCallExpressionLine(line: string, fn: string): { matched: boolean; safeRemove: boolean } {
+  const wsMatch = /^[ \t]*/.exec(line);
+  const wsLen = wsMatch ? wsMatch[0].length : 0;
+  if (!line.startsWith(fn, wsLen)) {
+    return { matched: false, safeRemove: false };
+  }
+  const openParen = wsLen + fn.length;
+  if (line[openParen] !== "(") {
+    return { matched: false, safeRemove: false };
+  }
+  const closeIdx = findClosingParen(line, openParen);
+  if (closeIdx === -1) {
+    return { matched: true, safeRemove: false };
+  }
+  const after = line.slice(closeIdx + 1);
+  if (/^[ \t]*(;[ \t]*)?$/.test(after)) {
+    return { matched: true, safeRemove: true };
+  }
+  return { matched: true, safeRemove: false };
+}
+
+function stripConfiguredCallExpressions(
+  code: string,
+  functions: string[],
+  chainedCalls: ChainedCallsPolicy,
+  moduleId: string
+): string {
+  const lines = code.split(/\r?\n/);
+  const out: string[] = [];
+
+  for (const line of lines) {
+    let replaced = false;
+    for (const fn of functions) {
+      const { matched, safeRemove } = analyzeCallExpressionLine(line, fn);
+      if (!matched) {
+        continue;
+      }
+      if (safeRemove) {
+        replaced = true;
+        break;
+      }
+      if (chainedCalls === "error") {
+        throw new Error(
+          `rolldown-plugin-strip: refusing to strip chained or non-statement call "${fn}" in ${moduleId}: ${line.trim()}`
+        );
+      }
+      if (chainedCalls === "warn") {
+        console.warn(
+          `[rolldown-plugin-strip] skipping strip of chained or non-statement call "${fn}" in ${moduleId}: ${line.trim()}`
+        );
+      }
+      break;
+    }
+    if (!replaced) {
+      out.push(line);
+    }
   }
 
-  return output;
+  return out.join("\n");
 }
 
 /**
@@ -104,7 +181,7 @@ export function strip(options: StripOptions = {}): StripPlugin {
     name: "rolldown-plugin-strip",
     apply: "build",
     enforce: "pre",
-    transform(code: string, _id: string) {
+    transform(code: string, id: string) {
       let stripped = code;
 
       if (options.debugger) {
@@ -112,7 +189,12 @@ export function strip(options: StripOptions = {}): StripPlugin {
       }
 
       if (options.functions?.length) {
-        stripped = stripConfiguredCallExpressions(stripped, options.functions);
+        stripped = stripConfiguredCallExpressions(
+          stripped,
+          options.functions,
+          options.chainedCalls ?? "skip",
+          id
+        );
       }
 
       if (options.labels?.length) {
