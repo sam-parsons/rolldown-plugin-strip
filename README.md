@@ -90,7 +90,8 @@ Outcomes for the chained/non-statement line:
 
 ## Notes
 
-- The plugin returns `map: null` in `transform` today (source-map emission is not implemented yet).
+- When the transform changes the module source, `transform` returns a **non-null** source map (VLQ v3) so debuggers and error stacks can map generated output back to the original file. Unchanged modules keep `map: null`.
+- When `functions` is enabled, line endings are normalized the same way as the stripper (`split(/\r?\n/).join("\n")`); if that step runs, the map is composed from the removal map and the newline-normalization map.
 - Call-expression matching is line-based and intentionally conservative to avoid unsafe removals.
 
 ## Local development and test

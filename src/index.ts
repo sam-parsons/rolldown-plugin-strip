@@ -1,3 +1,6 @@
+import remapping, { type SourceMapInput } from "@jridgewell/remapping";
+import MagicString from "magic-string";
+
 /**
  * When a configured call matches a line but the line is not only that call
  * (e.g. `fn().chain()`), stripping would break runtime. This policy controls
@@ -12,11 +15,15 @@ export interface StripOptions {
   chainedCalls?: ChainedCallsPolicy;
 }
 
+const STRIP_INTERMEDIATE = "\0rolldown-plugin-strip/intermediate";
+
+export type StripTransformMap = ReturnType<MagicString["generateMap"]> | ReturnType<typeof remapping>;
+
 export interface StripPlugin {
   name: "rolldown-plugin-strip";
   apply: "build";
   enforce: "pre";
-  transform: (code: string, id: string) => null | { code: string; map: null };
+  transform: (code: string, id: string) => null | { code: string; map: StripTransformMap | null };
 }
 
 function stripDebuggerStatements(code: string): string {
@@ -155,10 +162,8 @@ function findMatchingBrace(code: string, openBraceIndex: number): number {
   return -1;
 }
 
-/**
- * Removes statements prefixed with configured labels, including labeled blocks.
- */
-function stripConfiguredLabels(code: string, labels: string[]): string {
+function stripConfiguredLabelsSequential(code: string, labels: string[]): { code: string; orderedRemovals: [number, number][] } {
+  const orderedRemovals: [number, number][] = [];
   let output = code;
 
   for (const label of labels) {
@@ -187,6 +192,7 @@ function stripConfiguredLabels(code: string, labels: string[]): string {
         removeEnd += 1;
       }
 
+      orderedRemovals.push([matchStart, removeEnd]);
       output = output.slice(0, matchStart) + output.slice(removeEnd);
       blockPattern.lastIndex = matchStart;
       blockMatch = blockPattern.exec(output);
@@ -194,10 +200,227 @@ function stripConfiguredLabels(code: string, labels: string[]): string {
 
     // Remove single-line labeled statements such as `test: doThing();`.
     const statementPattern = new RegExp(`^[ \\t]*${escaped}[ \\t]*:[^\\n\\r]*\\r?\\n?`, "gm");
-    output = output.replace(statementPattern, "");
+    output = output.replace(statementPattern, (match, offset: number) => {
+      orderedRemovals.push([offset, offset + match.length]);
+      return "";
+    });
   }
 
-  return output;
+  return { code: output, orderedRemovals };
+}
+
+/**
+ * Removes statements prefixed with configured labels, including labeled blocks.
+ */
+function stripConfiguredLabels(code: string, labels: string[]): string {
+  return stripConfiguredLabelsSequential(code, labels).code;
+}
+
+function mergeRanges(ranges: [number, number][]): [number, number][] {
+  if (!ranges.length) {
+    return [];
+  }
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  let [currentStart, currentEnd] = sorted[0];
+  for (let i = 1; i < sorted.length; i += 1) {
+    const [start, end] = sorted[i];
+    if (start <= currentEnd) {
+      currentEnd = Math.max(currentEnd, end);
+    } else {
+      out.push([currentStart, currentEnd]);
+      currentStart = start;
+      currentEnd = end;
+    }
+  }
+  out.push([currentStart, currentEnd]);
+  return out;
+}
+
+function afterLength(originalCode: string, removals: [number, number][]): number {
+  const merged = mergeRanges(removals);
+  const removed = merged.reduce((sum, [a, b]) => sum + (b - a), 0);
+  return originalCode.length - removed;
+}
+
+function afterToOriginalIndex(originalCode: string, mergedRemovals: [number, number][], afterPos: number): number {
+  const afterLen = afterLength(originalCode, mergedRemovals);
+  if (afterPos < 0 || afterPos > afterLen) {
+    throw new Error(`rolldown-plugin-strip: internal mapping error (afterPos ${afterPos}, len ${afterLen})`);
+  }
+  if (afterPos === afterLen) {
+    return originalCode.length;
+  }
+
+  let orig = 0;
+  let after = 0;
+  let ri = 0;
+
+  while (orig < originalCode.length) {
+    while (ri < mergedRemovals.length && orig >= mergedRemovals[ri][1]) {
+      ri += 1;
+    }
+    if (ri < mergedRemovals.length && orig >= mergedRemovals[ri][0] && orig < mergedRemovals[ri][1]) {
+      orig = mergedRemovals[ri][1];
+      continue;
+    }
+    if (after === afterPos) {
+      return orig;
+    }
+    orig += 1;
+    after += 1;
+  }
+
+  return originalCode.length;
+}
+
+function mapAfterRangeToOriginal(
+  originalCode: string,
+  removalsInOriginal: [number, number][],
+  rangeAfter: [number, number]
+): [number, number] {
+  const merged = mergeRanges(removalsInOriginal);
+  const [a, b] = rangeAfter;
+  return [afterToOriginalIndex(originalCode, merged, a), afterToOriginalIndex(originalCode, merged, b)];
+}
+
+function findDebuggerRemovalRanges(code: string): [number, number][] {
+  const re = /^[ \t]*debugger\s*;?[ \t]*\r?\n?/gm;
+  const out: [number, number][] = [];
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(code))) {
+    out.push([match.index, match.index + match[0].length]);
+  }
+  return out;
+}
+
+function computeLineStarts(code: string, lines: string[]): number[] {
+  const starts: number[] = new Array(lines.length);
+  starts[0] = 0;
+  let pos = 0;
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    pos += lines[i].length;
+    if (pos < code.length && code.slice(pos, pos + 2) === "\r\n") {
+      pos += 2;
+    } else if (pos < code.length && (code[pos] === "\n" || code[pos] === "\r")) {
+      pos += 1;
+    }
+    starts[i + 1] = pos;
+  }
+  return starts;
+}
+
+function lineRemovalRange(
+  lineStarts: number[],
+  lines: string[],
+  lineIndex: number,
+  lineCount: number,
+  codeLength: number
+): [number, number] {
+  const start = lineStarts[lineIndex];
+  if (lineIndex < lineCount - 1) {
+    return [start, lineStarts[lineIndex + 1]];
+  }
+  // Last line: include the newline (or CRLF) before it so we do not leave a trailing separator
+  // after the previous kept line (matches `lines.filter(...).join("\n")` semantics).
+  if (lineIndex > 0) {
+    const afterPrevious = lineStarts[lineIndex - 1] + lines[lineIndex - 1].length;
+    return [afterPrevious, codeLength];
+  }
+  return [start, codeLength];
+}
+
+function findFunctionRemovalRangesInCode(
+  code: string,
+  functions: string[],
+  chainedCalls: ChainedCallsPolicy,
+  moduleId: string
+): [number, number][] {
+  const ranges: [number, number][] = [];
+  const lines = code.split(/\r?\n/);
+  const lineStarts = computeLineStarts(code, lines);
+  const lineCount = lines.length;
+
+  for (let lineIndex = 0; lineIndex < lineCount; lineIndex += 1) {
+    const line = lines[lineIndex];
+    let replaced = false;
+
+    for (const fn of functions) {
+      const { matched, safeRemove } = analyzeCallExpressionLine(line, fn);
+      if (!matched) {
+        continue;
+      }
+      if (safeRemove) {
+        replaced = true;
+        break;
+      }
+      if (chainedCalls === "error") {
+        throw new Error(
+          `rolldown-plugin-strip: refusing to strip chained or non-statement call "${fn}" in ${moduleId}: ${line.trim()}`
+        );
+      }
+      if (chainedCalls === "warn") {
+        console.warn(
+          `[rolldown-plugin-strip] skipping strip of chained or non-statement call "${fn}" in ${moduleId}: ${line.trim()}`
+        );
+      }
+      break;
+    }
+
+    if (replaced) {
+      ranges.push(lineRemovalRange(lineStarts, lines, lineIndex, lineCount, code.length));
+    }
+  }
+
+  return ranges;
+}
+
+function expandThroughRemoval(pos: number, removal: [number, number]): number {
+  if (pos < removal[0]) {
+    return pos;
+  }
+  return pos + (removal[1] - removal[0]);
+}
+
+function expandRangeThroughPriorRemovals(range: [number, number], priorRemovalsInOrder: [number, number][]): [number, number] {
+  let [start, end] = range;
+  for (let i = priorRemovalsInOrder.length - 1; i >= 0; i -= 1) {
+    const removal = priorRemovalsInOrder[i];
+    start = expandThroughRemoval(start, removal);
+    end = expandThroughRemoval(end, removal);
+  }
+  return [start, end];
+}
+
+function normalizeLineEndingsToLfLikeStrip(code: string): string {
+  return code.split(/\r?\n/).join("\n");
+}
+
+function buildNormalizeMagicString(mid: string, normalized: string): MagicString {
+  const msNorm = new MagicString(mid);
+  for (let i = mid.length - 2; i >= 0; i -= 1) {
+    if (mid[i] === "\r" && mid[i + 1] === "\n") {
+      msNorm.overwrite(i, i + 2, "\n");
+    }
+  }
+  if (msNorm.toString() !== normalized) {
+    msNorm.overwrite(0, mid.length, normalized);
+  }
+  return msNorm;
+}
+
+function runStripPipeline(code: string, options: StripOptions, moduleId: string): string {
+  let stripped = code;
+  if (options.debugger) {
+    stripped = stripDebuggerStatements(stripped);
+  }
+  if (options.functions?.length) {
+    stripped = stripConfiguredCallExpressions(stripped, options.functions, options.chainedCalls ?? "skip", moduleId);
+  }
+  if (options.labels?.length) {
+    stripped = stripConfiguredLabels(stripped, options.labels);
+  }
+  return stripped;
 }
 
 export function strip(options: StripOptions = {}): StripPlugin {
@@ -206,26 +429,94 @@ export function strip(options: StripOptions = {}): StripPlugin {
     apply: "build",
     enforce: "pre",
     transform(code: string, id: string) {
-      let stripped = code;
-
-      if (options.debugger) {
-        stripped = stripDebuggerStatements(stripped);
+      const expected = runStripPipeline(code, options, id);
+      if (expected === code) {
+        return { code, map: null };
       }
+
+      const dbgRanges = options.debugger ? findDebuggerRemovalRanges(code) : [];
+      const dbgMerged = mergeRanges(dbgRanges);
+
+      const d1 = options.debugger ? stripDebuggerStatements(code) : code;
+
+      const fnRangesD1 = options.functions?.length
+        ? findFunctionRemovalRangesInCode(d1, options.functions, options.chainedCalls ?? "skip", id)
+        : [];
+      const fnMergedD1 = mergeRanges(fnRangesD1);
+
+      const d2 = options.functions?.length
+        ? stripConfiguredCallExpressions(d1, options.functions, options.chainedCalls ?? "skip", id)
+        : d1;
+
+      const { orderedRemovals: labelOrderedInD2 } = options.labels?.length
+        ? stripConfiguredLabelsSequential(d2, options.labels)
+        : { orderedRemovals: [] as [number, number][] };
+
+      const labelRangesD2Root = labelOrderedInD2.map((removal, index) =>
+        expandRangeThroughPriorRemovals(removal, labelOrderedInD2.slice(0, index))
+      );
+
+      const fnRangesOrig = fnRangesD1.map((range) => mapAfterRangeToOriginal(code, dbgMerged, range));
+      const labelRangesOrig = labelRangesD2Root.map((range) =>
+        mapAfterRangeToOriginal(code, dbgMerged, mapAfterRangeToOriginal(d1, fnMergedD1, range))
+      );
+
+      const allRemovalRanges = mergeRanges([...dbgRanges, ...fnRangesOrig, ...labelRangesOrig]);
+
+      const ms = new MagicString(code);
+      const sortedRemovals = [...allRemovalRanges].sort((a, b) => b[0] - a[0]);
+      for (const [start, end] of sortedRemovals) {
+        ms.remove(start, end);
+      }
+
+      const mid = ms.toString();
+      let finalCode = mid;
+      let map: StripTransformMap;
 
       if (options.functions?.length) {
-        stripped = stripConfiguredCallExpressions(
-          stripped,
-          options.functions,
-          options.chainedCalls ?? "skip",
-          id
-        );
+        const normalized = normalizeLineEndingsToLfLikeStrip(mid);
+        if (normalized !== mid) {
+          const msNorm = buildNormalizeMagicString(mid, normalized);
+          const mapRemovals = JSON.parse(
+            ms.generateMap({
+              file: STRIP_INTERMEDIATE,
+              source: id,
+              hires: true,
+              includeContent: false
+            }).toString()
+          ) as SourceMapInput;
+          const mapNormalize = JSON.parse(
+            msNorm.generateMap({
+              file: id,
+              source: STRIP_INTERMEDIATE,
+              hires: true,
+              includeContent: false
+            }).toString()
+          ) as SourceMapInput;
+          map = remapping([mapNormalize, mapRemovals], () => null);
+          finalCode = normalized;
+        } else {
+          map = ms.generateMap({
+            file: id,
+            source: id,
+            hires: true,
+            includeContent: false
+          });
+        }
+      } else {
+        map = ms.generateMap({
+          file: id,
+          source: id,
+          hires: true,
+          includeContent: false
+        });
       }
 
-      if (options.labels?.length) {
-        stripped = stripConfiguredLabels(stripped, options.labels);
+      if (finalCode !== expected) {
+        throw new Error("rolldown-plugin-strip: internal error — source map pipeline mismatch");
       }
 
-      return { code: stripped, map: null };
+      return { code: finalCode, map };
     }
   };
 }
