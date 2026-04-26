@@ -1,14 +1,14 @@
+/**
+ * When a configured call matches a line but the line is not only that call
+ * (e.g. `fn().chain()`), stripping would break runtime. This policy controls
+ * that case. Default at runtime is `"skip"` when the option is omitted.
+ */
 export type ChainedCallsPolicy = "skip" | "warn" | "error";
 
 export interface StripOptions {
   functions?: string[];
   debugger?: boolean;
   labels?: string[];
-  /**
-   * When a configured call is not a whole statement (e.g. `fn().chain()`),
-   * stripping would break runtime. Controls behavior for those lines.
-   * @default "skip"
-   */
   chainedCalls?: ChainedCallsPolicy;
 }
 
@@ -53,21 +53,28 @@ function findClosingParen(line: string, openParenIndex: number): number {
  * that call is a whole removable statement.
  */
 function analyzeCallExpressionLine(line: string, fn: string): { matched: boolean; safeRemove: boolean } {
+  // Leading indentation only; the call must start immediately after it.
   const leadingWhitespaceMatch = /^[ \t]*/.exec(line);
   const leadingWhitespaceLength = leadingWhitespaceMatch ? leadingWhitespaceMatch[0].length : 0;
   if (!line.startsWith(fn, leadingWhitespaceLength)) {
     return { matched: false, safeRemove: false };
   }
-  const openParen = leadingWhitespaceLength + fn.length;
-  if (line[openParen] !== "(") {
+
+  // A call expression must begin with `fn(` for the configured name `fn`.
+  const openingParenIndex = leadingWhitespaceLength + fn.length;
+  if (line[openingParenIndex] !== "(") {
     return { matched: false, safeRemove: false };
   }
-  const closeIdx = findClosingParen(line, openParen);
-  if (closeIdx === -1) {
+
+  // Walk parentheses so nested calls inside arguments do not confuse the end.
+  const closingParenIndex = findClosingParen(line, openingParenIndex);
+  if (closingParenIndex === -1) {
     return { matched: true, safeRemove: false };
   }
-  const after = line.slice(closeIdx + 1);
-  if (/^[ \t]*(;[ \t]*)?$/.test(after)) {
+
+  // Safe removal only if nothing meaningful remains after the call (optional `;`).
+  const remainderAfterCall = line.slice(closingParenIndex + 1);
+  if (/^[ \t]*(;[ \t]*)?$/.test(remainderAfterCall)) {
     return { matched: true, safeRemove: true };
   }
   return { matched: true, safeRemove: false };
