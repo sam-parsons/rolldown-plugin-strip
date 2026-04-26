@@ -12,15 +12,24 @@
     "build": "tsc -p tsconfig.build.json",
     "check": "npm run lint && npm run test",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "npm run check && npm run build"
   },
   "keywords": [
     "rolldown",
     "plugin",
     "strip"
   ],
-  "author": "",
+  "author": "sam-parsons",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/sam-parsons/rolldown-plugin-strip.git"
+  },
+  "bugs": {
+    "url": "https://github.com/sam-parsons/rolldown-plugin-strip/issues"
+  },
+  "homepage": "https://github.com/sam-parsons/rolldown-plugin-strip#readme",
   "devDependencies": {
     "@jridgewell/trace-mapping": "^0.3.31",
     "@types/estree": "^1.0.8",
