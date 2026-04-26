@@ -1,22 +1,105 @@
 # rolldown-plugin-strip
 
-`rolldown-plugin-strip` is a Rolldown-native plugin for stripping debug-only code from production builds.
+`rolldown-plugin-strip` removes debug-only code from Rolldown build output.
 
-## Status
+It currently supports:
 
-This repository is set up for issue-driven development. The implementation is intentionally incremental.
+- stripping configured function-call statements (for example `console.log(...)`);
+- stripping standalone `debugger` statements;
+- stripping configured labeled statements and labeled blocks;
+- safe handling for chained/non-statement call matches via `chainedCalls`.
 
-## Planned features
+## Install
 
-- Remove configured call expression statements (for example `console.log`).
-- Remove `debugger` statements.
-- Remove configured labeled blocks (`dev: { ... }`).
-- Handle chained-call edge cases safely.
+```bash
+npm install rolldown-plugin-strip
+```
 
-## Development
+## Usage (production build)
+
+The plugin is build-only (`apply: "build"`) and runs as a pre transform (`enforce: "pre"`).
+
+```ts
+import { defineConfig } from "rolldown";
+import { strip } from "rolldown-plugin-strip";
+
+export default defineConfig({
+  plugins: [
+    strip({
+      debugger: true,
+      functions: ["console.log", "console.debug"],
+      labels: ["dev", "debug"],
+      chainedCalls: "warn"
+    })
+  ]
+});
+```
+
+## Options
+
+```ts
+type ChainedCallsPolicy = "skip" | "warn" | "error";
+
+interface StripOptions {
+  functions?: string[];
+  debugger?: boolean;
+  labels?: string[];
+  chainedCalls?: ChainedCallsPolicy; // default: "skip"
+}
+```
+
+- `functions`
+  - A list of function names to strip when they appear as a full statement on a line.
+  - Example removable line: `console.log("debug");`
+- `debugger`
+  - When `true`, removes full lines containing only `debugger` (with optional semicolon).
+- `labels`
+  - A list of labels to remove, including single-line labeled statements and labeled blocks.
+  - Examples: `dev: doThing();`, `dev: { doThing(); }`, `dev: while (cond) { ... }`
+- `chainedCalls`
+  - Controls behavior when a configured function matches but cannot be safely removed as a whole statement.
+  - `"skip"` (default): keep the line unchanged.
+  - `"warn"`: keep the line and emit a warning to `console.warn`.
+  - `"error"`: throw and fail the build.
+
+## Chained-call behavior
+
+Given:
+
+```ts
+strip({ functions: ["debug"], chainedCalls: "skip" });
+```
+
+Safe removable line (always stripped):
+
+```ts
+debug("trace");
+```
+
+Chained/non-statement line (not safely removable):
+
+```ts
+debug("trace").trim();
+```
+
+Outcomes for the chained/non-statement line:
+
+- `chainedCalls: "skip"` -> line is left as-is.
+- `chainedCalls: "warn"` -> line is left as-is and a warning is logged.
+- `chainedCalls: "error"` -> an error is thrown and the build fails.
+
+## Notes
+
+- The plugin returns `map: null` in `transform` today (source-map emission is not implemented yet).
+- Call-expression matching is line-based and intentionally conservative to avoid unsafe removals.
+
+## Local development and test
 
 ```bash
 npm install
 npm run check
 npm run build
 ```
+
+- `npm run check` runs type-check/lint (`tsc --noEmit`) and tests (`vitest run`).
+- `npm run build` emits `dist/` using `tsconfig.build.json`.
