@@ -1,5 +1,10 @@
 # rolldown-plugin-strip
 
+[![npm version](https://img.shields.io/npm/v/rolldown-plugin-strip)](https://www.npmjs.com/package/rolldown-plugin-strip)
+[![npm license](https://img.shields.io/npm/l/rolldown-plugin-strip)](https://github.com/sam-parsons/rolldown-plugin-strip/blob/main/LICENSE)
+[![npm downloads](https://img.shields.io/npm/dm/rolldown-plugin-strip)](https://www.npmjs.com/package/rolldown-plugin-strip)
+[![CI](https://github.com/sam-parsons/rolldown-plugin-strip/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/sam-parsons/rolldown-plugin-strip/actions/workflows/ci.yml?query=branch%3Amain)
+
 `rolldown-plugin-strip` removes debug-only code from Rolldown build output.
 
 It currently supports:
