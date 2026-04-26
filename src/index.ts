@@ -15,6 +15,7 @@ export interface StripOptions {
   chainedCalls?: ChainedCallsPolicy;
 }
 
+// Virtual filename linking the removal-stage map to the LF-normalization map in `remapping` (not a real path).
 const STRIP_INTERMEDIATE = "\0rolldown-plugin-strip/intermediate";
 
 export type StripTransformMap = ReturnType<MagicString["generateMap"]> | ReturnType<typeof remapping>;
@@ -297,15 +298,15 @@ function findDebuggerRemovalRanges(code: string): [number, number][] {
 function computeLineStarts(code: string, lines: string[]): number[] {
   const starts: number[] = new Array(lines.length);
   starts[0] = 0;
-  let pos = 0;
+  let offsetInOriginalFile = 0;
   for (let i = 0; i < lines.length - 1; i += 1) {
-    pos += lines[i].length;
-    if (pos < code.length && code.slice(pos, pos + 2) === "\r\n") {
-      pos += 2;
-    } else if (pos < code.length && (code[pos] === "\n" || code[pos] === "\r")) {
-      pos += 1;
+    offsetInOriginalFile += lines[i].length;
+    if (offsetInOriginalFile < code.length && code.slice(offsetInOriginalFile, offsetInOriginalFile + 2) === "\r\n") {
+      offsetInOriginalFile += 2;
+    } else if (offsetInOriginalFile < code.length && (code[offsetInOriginalFile] === "\n" || code[offsetInOriginalFile] === "\r")) {
+      offsetInOriginalFile += 1;
     }
-    starts[i + 1] = pos;
+    starts[i + 1] = offsetInOriginalFile;
   }
   return starts;
 }
@@ -396,15 +397,15 @@ function normalizeLineEndingsToLfLikeStrip(code: string): string {
   return code.split(/\r?\n/).join("\n");
 }
 
-function buildNormalizeMagicString(mid: string, normalized: string): MagicString {
-  const msNorm = new MagicString(mid);
-  for (let i = mid.length - 2; i >= 0; i -= 1) {
-    if (mid[i] === "\r" && mid[i + 1] === "\n") {
+function buildNormalizeMagicString(codeAfterRemovals: string, normalized: string): MagicString {
+  const msNorm = new MagicString(codeAfterRemovals);
+  for (let i = codeAfterRemovals.length - 2; i >= 0; i -= 1) {
+    if (codeAfterRemovals[i] === "\r" && codeAfterRemovals[i + 1] === "\n") {
       msNorm.overwrite(i, i + 2, "\n");
     }
   }
   if (msNorm.toString() !== normalized) {
-    msNorm.overwrite(0, mid.length, normalized);
+    msNorm.overwrite(0, codeAfterRemovals.length, normalized);
   }
   return msNorm;
 }
@@ -464,19 +465,20 @@ export function strip(options: StripOptions = {}): StripPlugin {
       const allRemovalRanges = mergeRanges([...dbgRanges, ...fnRangesOrig, ...labelRangesOrig]);
 
       const ms = new MagicString(code);
-      const sortedRemovals = [...allRemovalRanges].sort((a, b) => b[0] - a[0]);
-      for (const [start, end] of sortedRemovals) {
+      // Descending by range start: apply removals from later offsets first (batch delete convention; offsets stay in original-file space).
+      const sortedRemovalRangesDescending = [...allRemovalRanges].sort((a, b) => b[0] - a[0]);
+      for (const [start, end] of sortedRemovalRangesDescending) {
         ms.remove(start, end);
       }
 
-      const mid = ms.toString();
-      let finalCode = mid;
+      const codeAfterRemovals = ms.toString();
+      let finalCode = codeAfterRemovals;
       let map: StripTransformMap;
 
       if (options.functions?.length) {
-        const normalized = normalizeLineEndingsToLfLikeStrip(mid);
-        if (normalized !== mid) {
-          const msNorm = buildNormalizeMagicString(mid, normalized);
+        const normalized = normalizeLineEndingsToLfLikeStrip(codeAfterRemovals);
+        if (normalized !== codeAfterRemovals) {
+          const msNorm = buildNormalizeMagicString(codeAfterRemovals, normalized);
           const mapRemovals = JSON.parse(
             ms.generateMap({
               file: STRIP_INTERMEDIATE,

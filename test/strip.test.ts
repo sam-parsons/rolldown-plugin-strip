@@ -1,10 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { originalPositionFor, TraceMap } from "@jridgewell/trace-mapping";
+import { eachMapping, originalPositionFor, TraceMap } from "@jridgewell/trace-mapping";
 import { strip } from "../src/index.js";
 
 function parseSourceMapJson(map: { toString(): string } | null): Record<string, unknown> {
   expect(map).not.toBeNull();
   return JSON.parse(map!.toString()) as Record<string, unknown>;
+}
+
+/** Assert the map is not empty VLQ only — it actually contains traceable segments. */
+function expectSourceMapHasTraceableSegments(raw: Record<string, unknown>) {
+  const map = new TraceMap(raw as ConstructorParameters<typeof TraceMap>[0]);
+  let segmentCount = 0;
+  eachMapping(map, () => {
+    segmentCount += 1;
+  });
+  expect(segmentCount).toBeGreaterThan(0);
 }
 
 describe("strip", () => {
@@ -37,7 +47,7 @@ describe("strip", () => {
     expect(raw.version).toBe(3);
     expect(raw.sources).toEqual(["index.ts"]);
     expect(typeof raw.mappings).toBe("string");
-    expect((raw.mappings as string).length).toBeGreaterThan(0);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("maps generated lines back to the original source after stripping debugger", () => {
@@ -66,7 +76,7 @@ describe("strip", () => {
     );
     const raw = parseSourceMapJson(transformed!.map as { toString(): string });
     expect(raw.version).toBe(3);
-    expect((raw.mappings as string).length).toBeGreaterThan(0);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("skips chained calls by default so stripping does not break runtime", () => {
@@ -77,7 +87,7 @@ describe("strip", () => {
     expect(transformed?.code).toBe("console.log('x').then(() => {});");
     const raw = parseSourceMapJson(transformed!.map as { toString(): string });
     expect(raw.sources).toEqual(["chain.ts"]);
-    expect((raw.mappings as string).length).toBeGreaterThan(0);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("throws on chained calls when chainedCalls is error", () => {
@@ -117,7 +127,7 @@ describe("strip", () => {
 
     expect(transformed?.code).toBe(["console.log('before');", "console.log('after');"].join("\n"));
     const raw = parseSourceMapJson(transformed!.map as { toString(): string });
-    expect((raw.mappings as string).length).toBeGreaterThan(0);
+    expectSourceMapHasTraceableSegments(raw);
   });
 
   it("removes configured non-block labeled statements (MDN-style)", () => {
@@ -135,6 +145,6 @@ describe("strip", () => {
 
     expect(transformed?.code).toBe(["let x = 0;", "let z = 0;", "console.log('kept');"].join("\n"));
     const raw = parseSourceMapJson(transformed!.map as { toString(): string });
-    expect((raw.mappings as string).length).toBeGreaterThan(0);
+    expectSourceMapHasTraceableSegments(raw);
   });
 });
