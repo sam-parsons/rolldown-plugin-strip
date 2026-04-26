@@ -35,10 +35,10 @@ function escapeRegExp(value: string): string {
 function findClosingParen(line: string, openParenIndex: number): number {
   let depth = 0;
   for (let i = openParenIndex; i < line.length; i += 1) {
-    const c = line[i];
-    if (c === "(") {
+    const currentChar = line[i];
+    if (currentChar === "(") {
       depth += 1;
-    } else if (c === ")") {
+    } else if (currentChar === ")") {
       depth -= 1;
       if (depth === 0) {
         return i;
@@ -48,13 +48,17 @@ function findClosingParen(line: string, openParenIndex: number): number {
   return -1;
 }
 
+/**
+ * Checks whether a line starts with a configured function call and whether
+ * that call is a whole removable statement.
+ */
 function analyzeCallExpressionLine(line: string, fn: string): { matched: boolean; safeRemove: boolean } {
-  const wsMatch = /^[ \t]*/.exec(line);
-  const wsLen = wsMatch ? wsMatch[0].length : 0;
-  if (!line.startsWith(fn, wsLen)) {
+  const leadingWhitespaceMatch = /^[ \t]*/.exec(line);
+  const leadingWhitespaceLength = leadingWhitespaceMatch ? leadingWhitespaceMatch[0].length : 0;
+  if (!line.startsWith(fn, leadingWhitespaceLength)) {
     return { matched: false, safeRemove: false };
   }
-  const openParen = wsLen + fn.length;
+  const openParen = leadingWhitespaceLength + fn.length;
   if (line[openParen] !== "(") {
     return { matched: false, safeRemove: false };
   }
@@ -69,6 +73,10 @@ function analyzeCallExpressionLine(line: string, fn: string): { matched: boolean
   return { matched: true, safeRemove: false };
 }
 
+/**
+ * Strips configured function calls when they are whole statements.
+ * For non-statement/chained matches, behavior is controlled by `chainedCalls`.
+ */
 function stripConfiguredCallExpressions(
   code: string,
   functions: string[],
@@ -78,17 +86,24 @@ function stripConfiguredCallExpressions(
   const lines = code.split(/\r?\n/);
   const out: string[] = [];
 
+  // Process each line independently so we can safely skip ambiguous chained cases.
   for (const line of lines) {
     let replaced = false;
+
+    // Try each configured function against the current line.
     for (const fn of functions) {
       const { matched, safeRemove } = analyzeCallExpressionLine(line, fn);
       if (!matched) {
         continue;
       }
+
+      // Whole-statement calls are safe to strip.
       if (safeRemove) {
         replaced = true;
         break;
       }
+
+      // Matched but not safe: enforce policy for chained/non-statement calls.
       if (chainedCalls === "error") {
         throw new Error(
           `rolldown-plugin-strip: refusing to strip chained or non-statement call "${fn}" in ${moduleId}: ${line.trim()}`
@@ -101,6 +116,8 @@ function stripConfiguredCallExpressions(
       }
       break;
     }
+
+    // Keep lines we did not strip.
     if (!replaced) {
       out.push(line);
     }
