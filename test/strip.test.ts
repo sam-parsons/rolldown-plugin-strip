@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { strip } from "../src/index.js";
 
 describe("strip", () => {
@@ -33,7 +33,7 @@ describe("strip", () => {
   });
 
   it("removes configured call expression statements", () => {
-    const plugin = strip({ functions: ["console.log", "logger.debug"] });
+    const plugin = strip({ functions: ["console.log", "logger.debug"], chainedCalls: "skip" });
     const source = [
       "const keep = true;",
       "console.log('remove me');",
@@ -51,6 +51,38 @@ describe("strip", () => {
       ].join("\n"),
       map: null
     });
+  });
+
+  it("skips chained calls by default so stripping does not break runtime", () => {
+    const plugin = strip({ functions: ["console.log"] });
+    const source = ["console.log('ok');", "console.log('x').then(() => {});", "console.log('tail');"].join("\n");
+    const transformed = plugin.transform(source, "chain.ts");
+
+    expect(transformed).toEqual({
+      code: "console.log('x').then(() => {});",
+      map: null
+    });
+  });
+
+  it("throws on chained calls when chainedCalls is error", () => {
+    const plugin = strip({ functions: ["console.log"], chainedCalls: "error" });
+    const source = "console.log('x').then(() => {});";
+
+    expect(() => plugin.transform(source, "bad.ts")).toThrow(/refusing to strip chained/);
+  });
+
+  it("warns on chained calls when chainedCalls is warn", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const plugin = strip({ functions: ["console.log"], chainedCalls: "warn" });
+      const source = "console.log('x').then(() => {});";
+      const transformed = plugin.transform(source, "warn.ts");
+
+      expect(transformed?.code).toBe(source);
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("removes configured labeled blocks (MDN-style)", () => {
